@@ -6,7 +6,7 @@ import tempfile
 import time
 import zipfile
 import requests
-import Streamlit as st
+import streamlit as st
 from bs4 import BeautifulSoup
 
 # Import các thư viện phụ thuộc (Đã khai báo trong requirements.txt)
