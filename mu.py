@@ -358,7 +358,7 @@ with tab1:
             progress_bar = st.progress(0)
 
             # BƯỚC 1: Lấy URL Upload từ MinerU (/api/v4/file-urls/batch)
-            status_box.info("🔑 [1/4] Đang lấy link Upload trực tiếp từ MinerU...")
+            status_box.info("🔑 [1/4] Đang lấy link Upload từ MinerU...")
             get_url_payload = {
                 "files": [{"name": uploaded_file.name}]
             }
@@ -380,15 +380,30 @@ with tab1:
                         put_url = file_info_list[0]
                         progress_bar.progress(25)
                         
-                        # BƯỚC 2: PUT Binary Data lên Server MinerU S3
-                        status_box.info("📤 [2/4] Đang truyền file trực tiếp tới MinerU Cloud...")
+                        # BƯỚC 2: PUT Binary Data lên S3 Storage
+                        # LƯU Ý SỬA LỖI 403: Không gửi Bearer Token vào S3 PUT Request
+                        status_box.info("📤 [2/4] Đang truyền file trực tiếp lên MinerU Cloud Storage...")
+                        
+                        content_type = uploaded_file.type if uploaded_file.type else "application/pdf"
+                        put_headers = {
+                            "Content-Type": content_type
+                        }
+                        
                         put_res = requests.put(
                             put_url,
                             data=uploaded_file.getvalue(),
-                            headers={"Content-Type": "application/octet-stream"},
+                            headers=put_headers,
                             timeout=120
                         )
                         
+                        # Thử lại không dùng Header nếu S3 yêu cầu Raw Binary
+                        if put_res.status_code not in [200, 201]:
+                            put_res = requests.put(
+                                put_url,
+                                data=uploaded_file.getvalue(),
+                                timeout=120
+                            )
+
                         if put_res.status_code in [200, 201]:
                             progress_bar.progress(50)
                             # BƯỚC 3: Khởi tạo Task OCR với batch_id
