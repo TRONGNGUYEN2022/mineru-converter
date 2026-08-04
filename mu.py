@@ -310,7 +310,7 @@ with st.sidebar:
                 st.rerun()
 
     st.markdown("---")
-    st.subheader("📂 Thư mục lưu ZIP")
+    st.subheader("📂 Thư mục lưu file")
     st.text_input("Đường dẫn hiện tại:", value=st.session_state.output_dir, key="dir_display", disabled=True)
     
     col_dir1, col_dir2 = st.columns([1, 1])
@@ -334,7 +334,7 @@ tab1, tab2 = st.tabs([
     "📦 Convert File Sẵn Có (ZIP / JSON)",
 ])
 
-# --- TAB 1: TRÍCH XUẤT API ONLINE (CHUẨN API V4 - ĐÃ FIX URL) ---
+# --- TAB 1: TRÍCH XUẤT API ONLINE ---
 with tab1:
     uploaded_file = st.file_uploader(
         "Tải lên file tài liệu (PDF, PNG, JPG, DOCX...):",
@@ -380,7 +380,7 @@ with tab1:
                 st.stop()
             progress_bar.progress(50)
 
-            # 3. Kích hoạt Task Phân tích (Bổ sung đầy đủ URL và các cờ tối ưu)
+            # 3. Kích hoạt Task Phân tích
             status_box.info("⚡ [3/3] Đang kích hoạt máy chủ nhận diện...")
             task_payload = {
                 "batch_id": batch_id,
@@ -402,21 +402,22 @@ with tab1:
                 status_box.error(f"❌ Không thể khởi chạy Task: {task_json.get('msg', 'Lỗi tham số API')}")
                 st.stop()
 
-            # 4. Polling kiểm tra tiến độ
+            # 4. Polling kiểm tra tiến độ (Chuẩn API v4 Web)
             query_url = f"https://mineru.net/api/v4/extract/task/batch?batch_id={batch_id}"
             start_time = time.time()
-            zip_url = None
+            file_download_url = None
 
             while True:
                 elapsed = int(time.time() - start_time)
                 if elapsed > 180:
-                    status_box.error("⏱️ Quá thời gian chờ (3 phút)! Vui lòng kiểm tra lại credits tài khoản trên mineru.net.")
+                    status_box.error("⏱️ Quá thời gian chờ (3 phút)! Vui lòng thử lại.")
                     st.stop()
 
                 status_res = requests.get(query_url, headers=headers, timeout=10)
                 if status_res.status_code == 200:
                     res_json = status_res.json()
                     res_data = res_json.get("data", {})
+                    
                     extract_list = res_data.get("extract_result") or res_data.get("extract_results") or []
 
                     if extract_list:
@@ -426,7 +427,13 @@ with tab1:
                         status_box.info(f"⏳ Đang xử lý... Trạng thái MinerU: **{state.upper()}** ({elapsed}s)")
 
                         if state in ["done", "success", "finished"]:
-                            zip_url = item.get("full_zip_url") or item.get("download_url") or item.get("zip_url")
+                            file_download_url = (
+                                item.get("full_zip_url") 
+                                or item.get("download_url") 
+                                or item.get("zip_url") 
+                                or item.get("file_url")
+                                or item.get("result_url")
+                            )
                             progress_bar.progress(100)
                             break
                         elif state in ["failed", "error"]:
@@ -436,23 +443,23 @@ with tab1:
 
                 time.sleep(3)
 
-            # 5. Tải file kết quả và dựng Word / Markdown
-            if zip_url:
+            # 5. Tải file kết quả tự động và dựng Word / Markdown
+            if file_download_url:
                 status_box.info("⚡ Đang tải kết quả và chuyển đổi sang Word Native Math...")
-                zip_res = requests.get(zip_url, timeout=60)
+                file_res = requests.get(file_download_url, timeout=60)
                 
-                if zip_res.status_code == 200:
-                    zip_bytes = zip_res.content
+                if file_res.status_code == 200:
+                    file_bytes = file_res.content
                     
-                    try:
-                        os.makedirs(st.session_state.output_dir, exist_ok=True)
-                        saved_zip_path = os.path.join(st.session_state.output_dir, f"{base_name}_mineru.zip")
-                        with open(saved_zip_path, "wb") as f:
-                            f.write(zip_bytes)
-                    except Exception:
-                        pass
-
-                    json_data, images_dict = extract_zip_and_get_data(zip_bytes)
+                    if file_download_url.endswith(".zip") or file_bytes.startswith(b"PK\x03\x04"):
+                        json_data, images_dict = extract_zip_and_get_data(file_bytes)
+                    else:
+                        try:
+                            json_data = json.loads(file_bytes.decode("utf-8"))
+                            images_dict = {}
+                        except Exception:
+                            json_data = {}
+                            images_dict = {}
 
                     if json_data:
                         status_box.success(f"🎉 Hoàn tất trích xuất trong **{int(time.time() - start_time)} giây**!")
@@ -484,7 +491,9 @@ with tab1:
                                 use_container_width=True,
                             )
                     else:
-                        status_box.error("❌ File ZIP trả về không chứa dữ liệu JSON hợp lệ.")
+                        status_box.error("❌ Không thể đọc cấu trúc dữ liệu trả về từ kết quả.")
+            else:
+                status_box.error("❌ Không tìm thấy đường dẫn tải file kết quả từ API.")
         except Exception as e:
             status_box.error(f"❌ Lỗi kết nối: {e}")
 
