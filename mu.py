@@ -357,8 +357,8 @@ with tab1:
             status_box = st.empty()
             progress_bar = st.progress(0)
 
-            # BƯỚC 1: Lấy URL Upload từ MinerU (/api/v4/file-urls/batch)
-            status_box.info("🔑 [1/4] Đang lấy link Upload từ MinerU...")
+            # BƯỚC 1: Lấy Pre-signed URL từ MinerU
+            status_box.info("🔑 [1/4] Đang xin cấp quyền Upload từ MinerU...")
             get_url_payload = {
                 "files": [{"name": uploaded_file.name}]
             }
@@ -380,14 +380,11 @@ with tab1:
                         put_url = file_info_list[0]
                         progress_bar.progress(25)
                         
-                        # BƯỚC 2: PUT Binary Data lên S3 Storage
-                        # LƯU Ý SỬA LỖI 403: Không gửi Bearer Token vào S3 PUT Request
+                        # BƯỚC 2: Upload Binary Data lên S3 Storage
                         status_box.info("📤 [2/4] Đang truyền file trực tiếp lên MinerU Cloud Storage...")
                         
                         content_type = uploaded_file.type if uploaded_file.type else "application/pdf"
-                        put_headers = {
-                            "Content-Type": content_type
-                        }
+                        put_headers = {"Content-Type": content_type}
                         
                         put_res = requests.put(
                             put_url,
@@ -396,7 +393,6 @@ with tab1:
                             timeout=120
                         )
                         
-                        # Thử lại không dùng Header nếu S3 yêu cầu Raw Binary
                         if put_res.status_code not in [200, 201]:
                             put_res = requests.put(
                                 put_url,
@@ -406,20 +402,31 @@ with tab1:
 
                         if put_res.status_code in [200, 201]:
                             progress_bar.progress(50)
-                            # BƯỚC 3: Khởi tạo Task OCR với batch_id
-                            status_box.info("⚙️ [3/4] Đang khởi tạo nhiệm vụ bóc tách OCR...")
+                            
+                            # BƯỚC 3: Khởi tạo Task Batch OCR (/extract/task/batch)
+                            status_box.info("⚙️ [3/4] Đang kích hoạt tiến trình bóc tách OCR...")
                             extract_payload = {
                                 "batch_id": batch_id,
                                 "files": [{"name": uploaded_file.name, "is_ocr": True, "model_version": "vlm"}]
                             }
                             
+                            # Sửa endpoint chuẩn dạng batch
                             task_res = requests.post(
-                                "https://mineru.net/api/v4/extract/task",
+                                "https://mineru.net/api/v4/extract/task/batch",
                                 headers=headers,
                                 json=extract_payload,
                                 timeout=30
                             )
                             
+                            # Tự động chuyển fallback nếu API yêu cầu endpoint đơn
+                            if task_res.status_code != 200 or task_res.json().get("code") != 0:
+                                task_res = requests.post(
+                                    "https://mineru.net/api/v4/extract/task",
+                                    headers=headers,
+                                    json=extract_payload,
+                                    timeout=30
+                                )
+
                             if task_res.status_code == 200 and task_res.json().get("code") == 0:
                                 task_data = task_res.json().get("data", {})
                                 
@@ -427,13 +434,13 @@ with tab1:
                                 if isinstance(task_data, list) and len(task_data) > 0:
                                     task_id = task_data[0].get("task_id")
                                 elif isinstance(task_data, dict):
-                                    task_id = task_data.get("task_id")
+                                    task_id = task_data.get("task_id") or task_data.get("batch_id")
 
                                 if not task_id:
                                     status_box.error(f"❌ MinerU không trả về Task ID: {task_res.text}")
                                     st.stop()
 
-                                # BƯỚC 4: Theo dõi tiến trình trích xuất
+                                # BƯỚC 4: Kiểm tra trạng thái xử lý
                                 query_url = f"https://mineru.net/api/v4/extract/task/{task_id}"
                                 task_done = False
                                 final_data = {}
@@ -462,7 +469,7 @@ with tab1:
 
                                     time.sleep(3)
 
-                                # BƯỚC 5: Tải ZIP & Xuất file Word/Markdown
+                                # BƯỚC 5: Xuất kết quả
                                 if task_done and final_data.get("full_zip_url"):
                                     status_box.info("⚡ Đang tải dữ liệu và dựng file Word...")
                                     zip_res = requests.get(final_data["full_zip_url"], timeout=60)
@@ -473,7 +480,7 @@ with tab1:
                                         
                                         if json_data:
                                             progress_bar.progress(100)
-                                            status_box.success("🎉 Trích xuất hoàn tất! Bấm các nút bên dưới để tải file:")
+                                            status_box.success("🎉 Trích xuất hoàn tất! Bạn có thể tải file bên dưới:")
                                             st.markdown("---")
                                             
                                             st.download_button(
