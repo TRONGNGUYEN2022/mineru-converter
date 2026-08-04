@@ -9,13 +9,13 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-# Import các thư viện phụ thuộc (Đã khai báo trong requirements.txt)
+# Import các thư viện phụ thuộc
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches
 import pypandoc
 
-# Kiểm tra tkinter (nếu chạy cloud sẽ bỏ qua)
+# Kiểm tra tkinter
 try:
     import tkinter as tk
     from tkinter import filedialog
@@ -40,22 +40,6 @@ if "edit_key_mode" not in st.session_state:
 os.makedirs(st.session_state.output_dir, exist_ok=True)
 
 # ==========================================
-# HÀM MỞ CỬA SỔ CHỌN FOLDER NATIVE
-# ==========================================
-def select_folder():
-    if tk:
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            root.wm_attributes("-topmost", 1)
-            folder_selected = filedialog.askdirectory(master=root)
-            root.destroy()
-            return folder_selected
-        except Exception:
-            return None
-    return None
-
-# ==========================================
 # HÀM UPLOAD FILE TẠM ĐỂ GỬI API MINERU
 # ==========================================
 def upload_temp_file(uploaded_file):
@@ -69,12 +53,14 @@ def upload_temp_file(uploaded_file):
     }
     try:
         res = requests.post(
-            upload_url, data={"reqtype": "fileupload"}, files=files, timeout=60
+            upload_url, data={"reqtype": "fileupload"}, files=files, timeout=30
         )
         if res.status_code == 200 and res.text.startswith("http"):
             return res.text.strip()
+        else:
+            st.error(f"Lỗi Server Upload Tạm (Status {res.status_code}): {res.text}")
     except Exception as e:
-        st.error(f"Lỗi upload file gửi API: {e}")
+        st.error(f"Không thể kết nối Server Upload Tạm: {e}")
     return None
 
 # ==========================================
@@ -288,7 +274,7 @@ def convert_json_to_docx_pandoc_bytes(json_data, images_dict, local_img_dir=None
         md_text = convert_json_to_markdown(json_data, images_dict, temp_dir=temp_dir, local_img_dir=local_img_dir)
 
         if not md_text.strip():
-            raise ValueError("Nội dung Markdown sau khi giải mã bị rỗng. Vui lòng kiểm tra lại file JSON!")
+            raise ValueError("Nội dung Markdown sau khi giải mã bị rỗng!")
 
         output_docx_path = os.path.join(temp_dir, "output_native.docx")
         current_cwd = os.getcwd()
@@ -354,8 +340,6 @@ st.title("🌐 MinerU Online Converter")
 # SIDEBAR
 with st.sidebar:
     st.header("⚙️ Cấu hình Hệ Thống")
-    
-    # API KEY
     st.subheader("🔑 API Key")
     col_input, col_btn = st.columns([3, 1.2])
     with col_input:
@@ -390,84 +374,116 @@ with tab1:
         key="api_file",
     )
 
-    if uploaded_file and st.button("🚀 Bắt đầu trích xuất", type="primary", use_container_width=True):
-        token = st.session_state.api_key.strip()
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-        base_name = uploaded_file.name.rsplit(".", 1)[0]
+    btn_click = st.button("🚀 Bắt đầu trích xuất", type="primary", use_container_width=True)
 
-        with st.spinner("Đang tải file gửi lên MinerU..."):
+    if btn_click:
+        if not uploaded_file:
+            st.warning("⚠️ Vui lòng chọn file trước khi bấm trích xuất!")
+        else:
+            token = st.session_state.api_key.strip()
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+            base_name = uploaded_file.name.rsplit(".", 1)[0]
+
+            status_box = st.empty()
+            progress_bar = st.progress(0)
+
+            # Bước 1: Upload File
+            status_box.info("📤 [1/4] Đang tải file lên Server trung gian...")
             file_url = upload_temp_file(uploaded_file)
-            if not file_url:
-                st.stop()
 
-        with st.spinner("Đang khởi tạo Task MinerU..."):
-            payload = {"url": file_url, "model_version": "vlm", "is_ocr": True}
-            res = requests.post("https://mineru.net/api/v4/extract/task", headers=headers, json=payload)
-            if res.status_code != 200 or res.json().get("code") != 0:
-                st.error(f"Lỗi khởi tạo: {res.text}")
-                st.stop()
-            task_id = res.json()["data"]["task_id"]
-
-        query_url = f"https://mineru.net/api/v4/extract/task/{task_id}"
-        progress_bar = st.progress(0)
-        task_done = False
-        final_data = {}
-
-        while not task_done:
-            res_status = requests.get(query_url, headers=headers)
-            if res_status.status_code == 200:
-                data = res_status.json().get("data", {})
-                state = data.get("state")
-                if state == "done":
-                    progress_bar.progress(100)
-                    final_data = data
-                    task_done = True
-                elif state == "failed":
-                    st.error("Xử lý thất bại!")
-                    st.stop()
-                else:
-                    progress_bar.progress(50)
-                    time.sleep(3)
-
-        st.info("⚡ Đang tạo gói tải về...")
-        zip_url = final_data.get("full_zip_url")
-        images_dict = {}
-        json_data = {}
-
-        if zip_url:
-            zip_res = requests.get(zip_url)
-            if zip_res.status_code == 200:
-                json_data, images_dict = extract_zip_and_get_data(zip_res.content)
-
-        if json_data:
-            st.success("🎉 Trích xuất dữ liệu thành công!")
-            st.markdown("---")
-            col1, col2 = st.columns(2)
-
-            with col1:
+            if file_url:
+                progress_bar.progress(25)
+                # Bước 2: Gọi API MinerU
+                status_box.info("⚙️ [2/4] Đang tạo nhiệm vụ OCR trên MinerU...")
+                payload = {"url": file_url, "model_version": "vlm", "is_ocr": True}
+                
                 try:
-                    with st.spinner("Đang dựng Word Native Math..."):
-                        docx_pandoc = convert_json_to_docx_pandoc_bytes(json_data, images_dict)
-                    st.download_button(
-                        label="📐 Tải Word (Native Math Equation + Ảnh)",
-                        data=docx_pandoc,
-                        file_name=f"{base_name}_NativeMath.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        type="primary",
-                        use_container_width=True,
+                    res = requests.post(
+                        "https://mineru.net/api/v4/extract/task", 
+                        headers=headers, 
+                        json=payload,
+                        timeout=30
                     )
-                except Exception as e:
-                    st.error(f"Lỗi tạo Word: {e}")
+                    
+                    if res.status_code == 200 and res.json().get("code") == 0:
+                        task_id = res.json()["data"]["task_id"]
+                        progress_bar.progress(50)
+                        
+                        # Bước 3: Đợi MinerU xử lý
+                        query_url = f"https://mineru.net/api/v4/extract/task/{task_id}"
+                        task_done = False
+                        final_data = {}
+                        start_time = time.time()
 
-            with col2:
-                md_content = convert_json_to_markdown(json_data, images_dict)
-                st.download_button(
-                    label="📄 Tải File Markdown (.md)",
-                    data=md_content,
-                    file_name=f"{base_name}.md",
-                    mime="text/markdown",
-                    use_container_width=True,
-                )
+                        while not task_done:
+                            # Hạn chế treo vô tận: Timeout sau 3 phút
+                            if time.time() - start_time > 180:
+                                status_box.error("⏱️ Quá thời gian chờ (Timeout 3 phút). Vui lòng thử lại!")
+                                break
+
+                            status_box.info("🔄 [3/4] MinerU đang đọc tài liệu và chuyển đổi công thức toán... Vui lòng chờ...")
+                            try:
+                                res_status = requests.get(query_url, headers=headers, timeout=15)
+                                if res_status.status_code == 200:
+                                    data = res_status.json().get("data", {})
+                                    state = data.get("state")
+                                    if state == "done":
+                                        progress_bar.progress(80)
+                                        final_data = data
+                                        task_done = True
+                                    elif state == "failed":
+                                        status_box.error("❌ MinerU báo lỗi: Xử lý thất bại!")
+                                        break
+                            except Exception as err:
+                                pass
+
+                            time.sleep(3)
+
+                        # Bước 4: Tải kết quả ZIP về & Convert
+                        if task_done and final_data.get("full_zip_url"):
+                            status_box.info("⚡ [4/4] Đang tải gói kết quả và tạo file Word Native...")
+                            zip_res = requests.get(final_data["full_zip_url"], timeout=60)
+                            
+                            if zip_res.status_code == 200:
+                                json_data, images_dict = extract_zip_and_get_data(zip_res.content)
+                                
+                                if json_data:
+                                    progress_bar.progress(100)
+                                    status_box.success("🎉 Trích xuất dữ liệu hoàn tất!")
+                                    st.markdown("---")
+                                    
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        try:
+                                            docx_pandoc = convert_json_to_docx_pandoc_bytes(json_data, images_dict)
+                                            st.download_button(
+                                                label="📐 Tải Word (Native Math Equation + Ảnh)",
+                                                data=docx_pandoc,
+                                                file_name=f"{base_name}_NativeMath.docx",
+                                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                type="primary",
+                                                use_container_width=True,
+                                            )
+                                        except Exception as e:
+                                            st.error(f"Lỗi tạo Word: {e}")
+
+                                    with col2:
+                                        md_content = convert_json_to_markdown(json_data, images_dict)
+                                        st.download_button(
+                                            label="📄 Tải File Markdown (.md)",
+                                            data=md_content,
+                                            file_name=f"{base_name}.md",
+                                            mime="text/markdown",
+                                            use_container_width=True,
+                                        )
+                                else:
+                                    status_box.error("❌ Không tìm thấy dữ liệu JSON phù hợp trong kết quả ZIP.")
+                            else:
+                                status_box.error("❌ Không thể tải ZIP kết quả từ MinerU.")
+                    else:
+                        status_box.error(f"❌ MinerU từ chối khởi tạo: {res.text}")
+                except Exception as e:
+                    status_box.error(f"❌ Lỗi kết nối API MinerU: {e}")
 
 # --- TAB 2: CONVERT TỪ ZIP ---
 with tab2:
