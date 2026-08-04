@@ -334,7 +334,7 @@ tab1, tab2 = st.tabs([
     "📦 Convert File Sẵn Có (ZIP / JSON)",
 ])
 
-# --- TAB 1: TRÍCH XUẤT API ONLINE (CHUẨN API V4) ---
+# --- TAB 1: TRÍCH XUẤT API ONLINE (CHUẨN API V4 - ĐÃ FIX URL) ---
 with tab1:
     uploaded_file = st.file_uploader(
         "Tải lên file tài liệu (PDF, PNG, JPG, DOCX...):",
@@ -380,13 +380,14 @@ with tab1:
                 st.stop()
             progress_bar.progress(50)
 
-            # 3. Kích hoạt Task Phân tích (Chuẩn Payload API v4)
+            # 3. Kích hoạt Task Phân tích (Bổ sung đầy đủ URL và các cờ tối ưu)
             status_box.info("⚡ [3/3] Đang kích hoạt máy chủ nhận diện...")
             task_payload = {
                 "batch_id": batch_id,
+                "url": upload_url,
+                "is_ocr": True,
                 "enable_formula": True,
-                "layout_model": "doclayout_yolo",
-                "enable_table": True
+                "layout_model": "doclayout_yolo"
             }
             
             task_res = requests.post(
