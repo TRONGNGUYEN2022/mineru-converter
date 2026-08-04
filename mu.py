@@ -7,7 +7,7 @@ import time
 import zipfile
 import requests
 import streamlit as st
-from bs4 BeautifulSoup
+from bs4 import BeautifulSoup
 
 # Import tkinter an toàn cho cả môi trường Local và Cloud (Linux không có GUI)
 try:
